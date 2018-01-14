@@ -1,3 +1,4 @@
+# coding=utf-8
 import random
 import os
 
@@ -7,7 +8,7 @@ from keras.layers import Input, Lambda, Convolution2D, MaxPooling2D
 from keras.layers import Activation, Dropout, Flatten, Dense
 from keras.optimizers import SGD, RMSprop, Adam, Adadelta, Nadam
 from keras import backend as K
-import numpy   as np
+import numpy as np
 import sys
 
 
@@ -41,11 +42,12 @@ def Create_Pairs(domain_adaptation_task,repetition,sample_per_class):
     X_train_source=np.load('./row_data/' + UM + '_X_train_source_repetition_' + str(cc) + '_sample_per_class_' + str(SpC) + '.npy')
     y_train_source=np.load('./row_data/' + UM + '_y_train_source_repetition_' + str(cc) + '_sample_per_class_' + str(SpC) + '.npy')
 
-
+    # 每个元素是(source,target)相同类别的样本对
     Training_P=[]
+    # 每个元素是(source,target)不同类别的样本对
     Training_N=[]
 
-
+    # 遍历正例和负例的每种组合
     for trs in range(len(y_train_source)):
         for trt in range(len(y_train_target)):
             if y_train_source[trs]==y_train_target[trt]:
@@ -55,6 +57,7 @@ def Create_Pairs(domain_adaptation_task,repetition,sample_per_class):
 
 
     random.shuffle(Training_N)
+    # 孪生网络训练过程中，负例的数目是正例的3倍
     Training = Training_P+Training_N[:3*len(Training_P)]
     random.shuffle(Training)
 
@@ -64,6 +67,7 @@ def Create_Pairs(domain_adaptation_task,repetition,sample_per_class):
 
     y1=np.zeros([len(Training)])
     y2=np.zeros([len(Training)])
+    # 标志样本对是否是同一类
     yc=np.zeros([len(Training)])
 
     for i in range(len(Training)):
@@ -119,6 +123,7 @@ def Create_Model():
 def euclidean_distance(vects):
     eps = 1e-08
     x, y = vects
+    # 开方不能对负数进行
     return K.sqrt(K.maximum(K.sum(K.square(x - y), axis=1, keepdims=True), eps))
 
 
@@ -129,8 +134,22 @@ def eucl_dist_output_shape(shapes):
 
 
 def contrastive_loss(y_true, y_pred):
+    """
+    将论文中d(g(_i^s),g(x_j^t))和k(g(_i^s),g(x_j^t))合并了，
+    用y_true来表示source-target样本对是同类还是异类，
+    y_pred来表示||g(_i^s)-g(x_j^t)||
+    :param y_true:
+    :param y_pred:
+    :return:
+    """
     margin = 1
-    return K.mean(y_true * K.square(y_pred) + (1 - y_true) * K.square(K.maximum(margin - y_pred, 0)))
+    return K.mean(
+        y_true * K.square(y_pred) +
+        (1 - y_true) *
+        K.square(
+            K.maximum(margin - y_pred, 0)
+        )
+    )
 
 
 def training_the_model(model,domain_adaptation_task,repetition,sample_per_class):
@@ -158,7 +177,7 @@ def training_the_model(model,domain_adaptation_task,repetition,sample_per_class)
     X_test = X_test.reshape(X_test.shape[0], 16, 16, 1)
     y_test = np_utils.to_categorical(y_test, nb_classes)
 
-
+    # X1是source，X2是target
     X1 = np.load('./pairs/' + UM + '_X1_count_' + str(cc) + '_SpC_' + str(SpC) + '.npy')
     X2 = np.load('./pairs/' + UM + '_X2_count_' + str(cc) + '_SpC_' + str(SpC) + '.npy')
 
@@ -179,10 +198,19 @@ def training_the_model(model,domain_adaptation_task,repetition,sample_per_class)
         if e % 10 == 0:
             printn(str(e) + '->')
         for i in range(len(y2) / nn):
-            loss = model.train_on_batch([X1[i * nn:(i + 1) * nn, :, :, :], X2[i * nn:(i + 1) * nn, :, :, :]],
-                                        [y1[i * nn:(i + 1) * nn, :], yc[i * nn:(i + 1) * nn, ]])
-            loss = model.train_on_batch([X2[i * nn:(i + 1) * nn, :, :, :], X1[i * nn:(i + 1) * nn, :, :, :]],
-                                        [y2[i * nn:(i + 1) * nn, :], yc[i * nn:(i + 1) * nn, ]])
+            loss = model.train_on_batch(
+                [X1[i * nn:(i + 1) * nn, :, :, :],
+                 X2[i * nn:(i + 1) * nn, :, :, :]],
+                [y1[i * nn:(i + 1) * nn, :],
+                 yc[i * nn:(i + 1) * nn, ]]
+            )
+            # 在target上训练分类器
+            loss = model.train_on_batch(
+                [X2[i * nn:(i + 1) * nn, :, :, :],
+                 X1[i * nn:(i + 1) * nn, :, :, :]],
+                [y2[i * nn:(i + 1) * nn, :],
+                 yc[i * nn:(i + 1) * nn, ]]
+            )
 
         Out = model.predict([X_test, X_test])
         Acc_v = np.argmax(Out[0], axis=1) - np.argmax(y_test, axis=1)
